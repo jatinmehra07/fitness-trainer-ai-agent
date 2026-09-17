@@ -4,16 +4,19 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { vapi } from "@/lib/vapi";
 import { useUser } from "@clerk/nextjs";
-import { TranscriptPlan } from "@vapi-ai/web/dist/api";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-  
+
+interface ChatMessage {
+  content: string;
+  role: string;
+}
 
 const GenerateProgramPage = () => {
   const [callActive, setCallActive] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [messages, setMessages] = useState<any[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [callEnded, setCallEnded] = useState(false);
 
   const { user } = useUser();
@@ -21,59 +24,51 @@ const GenerateProgramPage = () => {
 
   const messageContainerRef = useRef<HTMLDivElement>(null);
 
-  // SOLUTION to get rid of "Meeting has ended" error
+  // Suppress "Meeting has ended" benign Daily.co cleanup errors
   useEffect(() => {
     const originalError = console.error;
-    // override console.error to ignore "Meeting has ended" errors
-    console.error = function (msg, ...args) {
+    console.error = function (msg?: unknown, ...args: unknown[]) {
       if (
-        msg &&
-        (msg.includes("Meeting has ended") ||
-          (args[0] && args[0].toString().includes("Meeting has ended")))
+        (typeof msg === "string" && msg.includes("Meeting has ended")) ||
+        (args[0] && String(args[0]).includes("Meeting has ended"))
       ) {
-        console.log("Ignoring known error: Meeting has ended");
-        return; // don't pass to original handler
+        return;
       }
-
-      // pass all other errors to the original handler
-      return originalError.call(console,user, msg, ...args);
+      return originalError.call(console, msg, ...args);
     };
 
-    // restore original handler on unmount
     return () => {
       console.error = originalError;
     };
   }, []);
 
-  // auto-scroll messages
+  // Auto-scroll messages
   useEffect(() => {
     if (messageContainerRef.current) {
       messageContainerRef.current.scrollTop = messageContainerRef.current.scrollHeight;
     }
   }, [messages]);
 
-  // navigate user to profile page after the call ends
+  // Navigate to profile page once call completes
   useEffect(() => {
     if (callEnded) {
       const redirectTimer = setTimeout(() => {
         router.push("/profile");
-      }, 2000);
+      }, 3000);
 
       return () => clearTimeout(redirectTimer);
     }
   }, [callEnded, router]);
 
-  // setup event listeners for vapi
+  // Setup Vapi event listeners
   useEffect(() => {
     const handleCallStart = () => {
-      console.log("Call started");
       setConnecting(false);
       setCallActive(true);
       setCallEnded(false);
     };
 
     const handleCallEnd = () => {
-      console.log("Call ended");
       setCallActive(false);
       setConnecting(false);
       setIsSpeaking(false);
@@ -81,47 +76,46 @@ const GenerateProgramPage = () => {
     };
 
     const handleSpeechStart = () => {
-      console.log("AI started Speaking");
-      console.log(user);
       setIsSpeaking(true);
     };
 
     const handleSpeechEnd = () => {
-      console.log("AI stopped Speaking");
       setIsSpeaking(false);
     };
-    const handleMessage = (message: any) => {
-      if (message.type === "transcript" && message.transcriptType === "final") {
-        const newMessage = { content: message.transcript, role: message.role };
+
+    const handleMessage = (message: Record<string, unknown>) => {
+      if (
+        message?.type === "transcript" &&
+        message?.transcriptType === "final" &&
+        typeof message?.transcript === "string"
+      ) {
+        const newMessage: ChatMessage = {
+          content: message.transcript,
+          role: typeof message.role === "string" ? message.role : "assistant",
+        };
         setMessages((prev) => [...prev, newMessage]);
       }
     };
 
-  
+    vapi.on("call-start", handleCallStart);
+    vapi.on("call-end", handleCallEnd);
+    vapi.on("speech-start", handleSpeechStart);
+    vapi.on("speech-end", handleSpeechEnd);
+    vapi.on("message", handleMessage);
 
-    vapi
-      .on("call-start", handleCallStart)
-      .on("call-end", handleCallEnd)
-      .on("speech-start", handleSpeechStart)
-      .on("speech-end", handleSpeechEnd)
-      .on("message", handleMessage)
-      //.on("error", handleError);
-
-    // cleanup event listeners on unmount
     return () => {
-      vapi
-        .off("call-start", handleCallStart)
-        .off("call-end", handleCallEnd)
-        .off("speech-start", handleSpeechStart)
-        .off("speech-end", handleSpeechEnd)
-        .off("message", handleMessage)
-        //.off("error", handleError);
+      vapi.off("call-start", handleCallStart);
+      vapi.off("call-end", handleCallEnd);
+      vapi.off("speech-start", handleSpeechStart);
+      vapi.off("speech-end", handleSpeechEnd);
+      vapi.off("message", handleMessage);
     };
   }, []);
 
   const toggleCall = async () => {
-    if (callActive) vapi.stop();
-    else {
+    if (callActive) {
+      vapi.stop();
+    } else {
       try {
         setConnecting(true);
         setMessages([]);
@@ -129,23 +123,23 @@ const GenerateProgramPage = () => {
 
         const fullName = user?.firstName
           ? `${user.firstName} ${user.lastName || ""}`.trim()
-          : "There";
+          : "Friend";
 
-        await vapi.start(process.env.NEXT_PUBLIC_VAPI_WORKFLOW_ID!, {
+        await vapi.start(process.env.NEXT_PUBLIC_VAPI_WORKFLOW_ID || "codeflex", {
           variableValues: {
             full_name: fullName,
             user_id: user?.id,
           },
         });
       } catch (error) {
-        console.log("Failed to start call", error);
+        console.error("Failed to start call", error);
         setConnecting(false);
       }
     }
   };
 
   return (
-    <div className="flex flex-col min-h-screen text-foreground overflow-hidden  pb-6 pt-24">
+    <div className="flex flex-col min-h-screen text-foreground overflow-hidden pb-6 pt-24">
       <div className="container mx-auto px-4 h-full max-w-5xl">
         {/* Title */}
         <div className="text-center mb-8">
@@ -158,18 +152,17 @@ const GenerateProgramPage = () => {
           </p>
         </div>
 
-        {/* VIDEO CALL AREA */}
+        {/* Video Call Area */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-          {/* AI ASSISTANT CARD */}
+          {/* AI Assistant Card */}
           <Card className="bg-card/90 backdrop-blur-sm border border-border overflow-hidden relative">
             <div className="aspect-video flex flex-col items-center justify-center p-6 relative">
-              {/* AI VOICE ANIMATION */}
+              {/* Sound Wave Animation */}
               <div
                 className={`absolute inset-0 ${
                   isSpeaking ? "opacity-30" : "opacity-0"
                 } transition-opacity duration-300`}
               >
-                {/* Voice wave animation when speaking */}
                 <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 flex justify-center items-center h-20">
                   {[...Array(5)].map((_, i) => (
                     <div
@@ -186,16 +179,15 @@ const GenerateProgramPage = () => {
                 </div>
               </div>
 
-              {/* AI IMAGE */}
+              {/* AI Avatar */}
               <div className="relative size-32 mb-4">
                 <div
                   className={`absolute inset-0 bg-primary opacity-10 rounded-full blur-lg ${
                     isSpeaking ? "animate-pulse" : ""
                   }`}
                 />
-
                 <div className="relative w-full h-full rounded-full bg-card flex items-center justify-center border border-border overflow-hidden">
-                  <div className="absolute inset-0 bg-gradient-to-b from-primary/10 to-secondary/10"></div>
+                  <div className="absolute inset-0 bg-gradient-to-b from-primary/10 to-secondary/10" />
                   <img
                     src="/ai-avatar.png"
                     alt="AI Assistant"
@@ -207,8 +199,7 @@ const GenerateProgramPage = () => {
               <h2 className="text-xl font-bold text-foreground">CodeFlex AI</h2>
               <p className="text-sm text-muted-foreground mt-1">Fitness & Diet Coach</p>
 
-              {/* SPEAKING INDICATOR */}
-
+              {/* Status Indicator */}
               <div
                 className={`mt-4 flex items-center gap-2 px-3 py-1 rounded-full bg-card border border-border ${
                   isSpeaking ? "border-primary" : ""
@@ -219,7 +210,6 @@ const GenerateProgramPage = () => {
                     isSpeaking ? "bg-primary animate-pulse" : "bg-muted"
                   }`}
                 />
-
                 <span className="text-xs text-muted-foreground">
                   {isSpeaking
                     ? "Speaking..."
@@ -233,34 +223,31 @@ const GenerateProgramPage = () => {
             </div>
           </Card>
 
-          {/* USER CARD */}
-          <Card className={`bg-card/90 backdrop-blur-sm border overflow-hidden relative`}>
+          {/* User Card */}
+          <Card className="bg-card/90 backdrop-blur-sm border border-border overflow-hidden relative">
             <div className="aspect-video flex flex-col items-center justify-center p-6 relative">
-              {/* User Image */}
               <div className="relative size-32 mb-4">
                 <img
-                  src={user?.imageUrl}
+                  src={user?.imageUrl || "/ai-avatar.png"}
                   alt="User"
-                  // ADD THIS "size-full" class to make it rounded on all images
-                  className="size-full object-cover rounded-full"
+                  className="size-full object-cover rounded-full border border-border"
                 />
               </div>
 
               <h2 className="text-xl font-bold text-foreground">You</h2>
               <p className="text-sm text-muted-foreground mt-1">
-                {user ? (user.firstName + " " + (user.lastName || "")).trim() : "Guest"}
+                {user ? `${user.firstName || ""} ${user.lastName || ""}`.trim() : "Guest"}
               </p>
 
-              {/* User Ready Text */}
-              <div className={`mt-4 flex items-center gap-2 px-3 py-1 rounded-full bg-card border`}>
-                <div className={`w-2 h-2 rounded-full bg-muted`} />
+              <div className="mt-4 flex items-center gap-2 px-3 py-1 rounded-full bg-card border border-border">
+                <div className="w-2 h-2 rounded-full bg-emerald-500" />
                 <span className="text-xs text-muted-foreground">Ready</span>
               </div>
             </div>
           </Card>
         </div>
 
-        {/* MESSAGE COINTER  */}
+        {/* Live Conversation Transcript */}
         {messages.length > 0 && (
           <div
             ref={messageContainerRef}
@@ -288,21 +275,21 @@ const GenerateProgramPage = () => {
           </div>
         )}
 
-        {/* CALL CONTROLS */}
+        {/* Call Controls */}
         <div className="w-full flex justify-center gap-4">
           <Button
-            className={`w-40 text-xl rounded-3xl ${
+            className={`w-44 text-lg rounded-3xl transition-all shadow-md ${
               callActive
-                ? "bg-destructive hover:bg-destructive/90"
+                ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground"
                 : callEnded
-                  ? "bg-green-600 hover:bg-green-700"
-                  : "bg-primary hover:bg-primary/90"
-            } text-white relative`}
-            onClick={toggleCall}
-            disabled={connecting || callEnded}
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                  : "bg-primary hover:bg-primary/90 text-primary-foreground"
+            } relative`}
+            onClick={callEnded ? () => router.push("/profile") : toggleCall}
+            disabled={connecting}
           >
             {connecting && (
-              <span className="absolute inset-0 rounded-full animate-ping bg-primary/50 opacity-75"></span>
+              <span className="absolute inset-0 rounded-full animate-ping bg-primary/50 opacity-75" />
             )}
 
             <span>
@@ -320,4 +307,5 @@ const GenerateProgramPage = () => {
     </div>
   );
 };
+
 export default GenerateProgramPage;
