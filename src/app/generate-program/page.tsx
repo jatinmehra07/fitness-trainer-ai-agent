@@ -4,8 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { vapi } from "@/lib/vapi";
 import { useUser } from "@clerk/nextjs";
+import { TranscriptPlan } from "@vapi-ai/web/dist/api";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+  
 
 const GenerateProgramPage = () => {
   const [callActive, setCallActive] = useState(false);
@@ -34,7 +36,7 @@ const GenerateProgramPage = () => {
       }
 
       // pass all other errors to the original handler
-      return originalError.call(console, msg, ...args);
+      return originalError.call(console,user, msg, ...args);
     };
 
     // restore original handler on unmount
@@ -55,7 +57,7 @@ const GenerateProgramPage = () => {
     if (callEnded) {
       const redirectTimer = setTimeout(() => {
         router.push("/profile");
-      }, 1500);
+      }, 2000);
 
       return () => clearTimeout(redirectTimer);
     }
@@ -80,6 +82,7 @@ const GenerateProgramPage = () => {
 
     const handleSpeechStart = () => {
       console.log("AI started Speaking");
+      console.log(user);
       setIsSpeaking(true);
     };
 
@@ -94,11 +97,7 @@ const GenerateProgramPage = () => {
       }
     };
 
-    const handleError = (error: any) => {
-      console.log("Vapi Error", error);
-      setConnecting(false);
-      setCallActive(false);
-    };
+  
 
     vapi
       .on("call-start", handleCallStart)
@@ -106,7 +105,7 @@ const GenerateProgramPage = () => {
       .on("speech-start", handleSpeechStart)
       .on("speech-end", handleSpeechEnd)
       .on("message", handleMessage)
-      .on("error", handleError);
+      //.on("error", handleError);
 
     // cleanup event listeners on unmount
     return () => {
@@ -116,7 +115,7 @@ const GenerateProgramPage = () => {
         .off("speech-start", handleSpeechStart)
         .off("speech-end", handleSpeechEnd)
         .off("message", handleMessage)
-        .off("error", handleError);
+        //.off("error", handleError);
     };
   }, []);
 
